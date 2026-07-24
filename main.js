@@ -10,57 +10,41 @@ export default {
 
       if (mode === "subscribe" && token === env.VERIFY_TOKEN) {
         return new Response(challenge, { status: 200 });
-      } else {
-        return new Response("Forbidden", { status: 403 });
       }
+      return new Response("Forbidden", { status: 403 });
     }
 
-    // 2. Nhận tin nhắn từ Facebook gửi sang (POST)
+    // 2. Nhận và xử lý tin nhắn từ Facebook gửi sang (POST)
     if (request.method === "POST") {
       try {
         const body = await request.json();
-        console.log("FULL FACEBOOK PAYLOAD:", JSON.stringify(body));
 
         if (body.object === "page") {
           for (const entry of body.entry) {
             const webhookEvent = entry.messaging?.[0];
             
-            if (webhookEvent && webhookEvent.sender && webhookEvent.sender.id) {
+            if (webhookEvent?.sender?.id) {
               const senderPsid = webhookEvent.sender.id;
               
               // Lấy nội dung tin nhắn văn bản hoặc tệp đính kèm
               let messageText = "Xin chào";
-              if (webhookEvent.message && webhookEvent.message.text) {
+              if (webhookEvent.message?.text) {
                 messageText = webhookEvent.message.text;
-              } else if (webhookEvent.message && webhookEvent.message.attachments) {
-                messageText = "Người dùng vừa gửi một tệp đính kèm hoặc hình ảnh.";
-              }
-
-              console.log(`Đang xử lý tin nhắn từ ${senderPsid}: ${messageText}`);
-
-              // Lưu tin nhắn của người dùng vào Supabase (Chạy ngầm không chặn luồng chính)
-              if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
-                ctx.waitUntil(saveToSupabase(env, senderPsid, messageText, "user"));
+              } else if (webhookEvent.message?.attachments) {
+                messageText = "Người dùng vừa gửi tệp đính kèm hoặc hình ảnh.";
               }
 
               // Gọi Gemini API để lấy câu trả lời
               const aiReply = await callGeminiAPI(messageText, env.GEMINI_API_KEY);
 
-              // Lưu phản hồi của bot vào Supabase (Chạy ngầm)
-              if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
-                ctx.waitUntil(saveToSupabase(env, senderPsid, aiReply, "bot"));
-              }
-
-              // Gửi tin nhắn trả lại Facebook Messenger
+              // Gửi phản hồi ngược lại Facebook Messenger
               await sendFacebookMessage(senderPsid, aiReply, env.PAGE_ACCESS_TOKEN);
-            } else {
-              console.log("Webhook nhận được nhưng không phải sự kiện nhắn tin chuẩn.");
             }
           }
         }
         return new Response("EVENT_RECEIVED", { status: 200 });
       } catch (err) {
-        console.error("Lỗi khi xử lý request:", err);
+        console.error("Worker Error:", err);
         return new Response("Internal Error", { status: 500 });
       }
     }
@@ -79,55 +63,40 @@ async function callGeminiAPI(prompt, apiKey) {
         contents: [{ parts: [{ text: prompt }] }]
       })
     });
+    
     const data = await response.json();
     
     if (data.error) {
-      return "Lỗi Google Gemini: " + data.error.message;
+      return "Lỗi từ Gemini: " + data.error.message;
     }
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Xin lỗi, tôi không thể trả lời lúc này.";
+    
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Bot hiện không có câu trả lời.";
   } catch (error) {
-    console.error("Gemini API error:", error);
-    return "Đã xảy ra lỗi khi kết nối với Gemini.";
+    console.error("Gemini fetch error:", error);
+    return "Lỗi kết nối tới Google Gemini.";
   }
 }
 
 // Hàm gửi tin nhắn qua Facebook Send API
 async function sendFacebookMessage(senderPsid, responseText, accessToken) {
-  const url = `https://graph.facebook.com/v21.0/me/messages?access_token=${accessToken}`;
-  const body = {
-    recipient: { id: senderPsid },
-    message: { text: responseText }
-  };
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  
-  const resData = await res.json();
-  console.log("Kết quả gửi tin nhắn cho Facebook:", JSON.stringify(resData));
-}
-
-// Hàm lưu trữ lịch sử vào Supabase Database
-async function saveToSupabase(env, senderId, message, senderType) {
   try {
-    await fetch(`${env.SUPABASE_URL}/rest/v1/messages`, {
+    const url = `https://graph.facebook.com/v21.0/me/messages?access_token=${accessToken}`;
+    const body = {
+      recipient: { id: senderPsid },
+      message: { text: responseText }
+    };
+
+    const res = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "apikey": env.SUPABASE_ANON_KEY,
-        "Authorization": `Bearer ${env.SUPABASE_ANON_KEY}`,
-        "Prefer": "return=minimal"
-      },
-      body: JSON.stringify({
-        sender_id: senderId,
-        message: message,
-        sender_type: senderType,
-        created_at: new Date().toISOString()
-      })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
     });
-  } catch (e) {
-    console.error("Lỗi kết nối Supabase:", e);
+    
+    const resData = await res.json();
+    if (resData.error) {
+      console.error("Facebook Send Error:", resData.error);
+    }
+  } catch (err) {
+    console.error("Facebook fetch error:", err);
   }
 }
