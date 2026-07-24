@@ -1,9 +1,9 @@
 import json
 import re
-from js import Response, fetch, Headers
+from js import Response, fetch
 
 # ==========================================
-# 1. CÁC CẤU HÌNH VÀ HÀM BỔ TRỢ (UTILS & PROMPT)
+# 1. CẤU HÌNH VÀ HÀM BỔ TRỢ
 # ==========================================
 
 SYSTEM_PROMPT = """Bạn là trợ lý bán hàng tự động chuyên nghiệp, thân thiện và nhiệt tình trên Messenger.
@@ -35,7 +35,7 @@ def split_message(text, max_length=1500):
     return chunks
 
 # ==========================================
-# 2. XỬ LÝ SUPABASE (DEDUPE, HISTORY, HANDOFF, ORDERS)
+# 2. XỬ LÝ SUPABASE
 # ==========================================
 
 async def supabase_request(env, endpoint, method="GET", body=None, extra_headers=None):
@@ -58,12 +58,10 @@ async def supabase_request(env, endpoint, method="GET", body=None, extra_headers
 async def is_duplicate_message(env, mid):
     if not mid:
         return False
-    # Kiểm tra xem mid đã xử lý chưa
     res = await supabase_request(env, f"processed_messages?mid=eq.{mid}&select=mid")
     data = await res.json()
     if isinstance(data, list) and len(data) > 0:
         return True
-    # Nếu chưa, ghi nhớ mid mới
     await supabase_request(env, "processed_messages", method="POST", body={"mid": mid})
     return False
 
@@ -92,7 +90,6 @@ async def save_chat_history(env, user_id, history):
     await supabase_request(env, "chat_history", method="POST", body=body, extra_headers=headers)
 
 async def extract_and_save_order(env, user_id, text):
-    # Regex bắt số điện thoại Việt Nam (10-11 chữ số)
     phone_pattern = r"(0[3|5|7|8|9][0-9]{8})"
     match = re.search(phone_pattern, text)
     if match:
@@ -126,7 +123,7 @@ async def send_email_alert(env, subject, content):
     await fetch(url, {"method": "POST", "headers": headers, "body": json.dumps(body)})
 
 # ==========================================
-# 4. GỌI GEMINI AI & GỬI TIN NHẮN MESSENGER
+# 4. GEMINI AI & MESSENGER
 # ==========================================
 
 async def call_gemini_ai(env, user_id, user_text):
@@ -135,14 +132,12 @@ async def call_gemini_ai(env, user_id, user_text):
     
     history = await get_chat_history(env, user_id)
     
-    # Cấu hình prompt cho AI
     contents = [
         {"role": "user", "parts": [{"text": f"{SYSTEM_PROMPT}\n\n{PRODUCTS_INFO}"}]},
         {"role": "model", "parts": [{"text": "Dạ, em đã hiểu rõ nhiệm vụ và bảng giá sản phẩm. Em sẵn sàng tư vấn cho khách hàng rồi ạ!"}]}
     ]
     
-    # Nối lịch sử trò chuyện cũ
-    for item in history[-6:]: # Lấy 6 tin nhắn gần nhất
+    for item in history[-6:]:
         contents.append(item)
         
     contents.append({"role": "user", "parts": [{"text": user_text}]})
@@ -153,7 +148,6 @@ async def call_gemini_ai(env, user_id, user_text):
     
     try:
         reply_text = data["candidates"][0]["content"]["parts"][0]["text"]
-        # Cập nhật và lưu lại history
         history.append({"role": "user", "parts": [{"text": user_text}]})
         history.append({"role": "model", "parts": [{"text": reply_text}]})
         await save_chat_history(env, user_id, history[-10:])
@@ -174,7 +168,7 @@ async def send_fb_message(env, recipient_id, text):
         await fetch(url, {"method": "POST", "headers": {"Content-Type": "application/json"}, "body": json.dumps(payload)})
 
 # ==========================================
-# 5. MAIN WORKER (XỬ LÝ WEBHOOK KHÁCH HÀNG)
+# 5. MAIN WORKER
 # ==========================================
 
 class DefaultExport:
@@ -182,7 +176,6 @@ class DefaultExport:
         method = request.method
         url = request.url
 
-        # TÍNH NĂNG 1: Xác thực Webhook với Facebook (GET)
         if method == "GET":
             from urllib.parse import parse_qs, urlparse
             parsed_url = urlparse(url)
@@ -199,7 +192,6 @@ class DefaultExport:
             else:
                 return Response.new("Forbidden", status=403)
 
-        # XỬ LÝ TIN NHẮN TỚI (POST)
         if method == "POST":
             try:
                 body_text = await request.text()
@@ -217,19 +209,15 @@ class DefaultExport:
                             if not user_text or not sender_id:
                                 continue
 
-                            # TÍNH NĂNG 2: Chống xử lý trùng tin nhắn khi FB gửi webhook đúp
                             if await is_duplicate_message(env, mid):
                                 continue
 
-                            # TÍNH NĂNG 3: Kiểm tra xem Fanpage có đang bật chế độ 人 Nhân viên tiếp quản không
                             if await check_human_takeover(env, sender_id):
-                                # Kiểm tra xem khách có gõ lệnh bật lại bot không
                                 if user_text.strip().lower() == "/bot":
                                     await set_human_takeover(env, sender_id, False)
                                     await send_fb_message(env, sender_id, "🤖 Bot tự động đã được bật lại để hỗ trợ bạn!")
                                 continue
 
-                            # TÍNH NĂNG 4: Kiểm tra yêu cầu chuyển Nhân Viên Thật
                             keywords_human = ["gặp nhân viên", "gặp tư vấn viên", "người thật", "chuyển người thật", "tắt bot"]
                             if any(kw in user_text.lower() for kw in keywords_human):
                                 await set_human_takeover(env, sender_id, True)
@@ -237,12 +225,10 @@ class DefaultExport:
                                 await send_email_alert(env, f"🚨 YÊU CẦU TƯ VẤN VIÊN: Khách {sender_id}", f"Khách hàng id {sender_id} vừa yêu cầu gặp nhân viên thật với tin nhắn: '{user_text}'")
                                 continue
 
-                            # TÍNH NĂNG 5: Tự động bóc tách Số Điện Thoại & Lưu Đơn Hàng + Báo Email
                             phone = await extract_and_save_order(env, sender_id, user_text)
                             if phone:
                                 await send_email_alert(env, f"📦 ĐƠN HÀNG MỚI từ SĐT {phone}", f"Khách hàng {sender_id} vừa để lại SĐT: {phone}\nNội dung: {user_text}")
 
-                            # TÍNH NĂNG 6, 7, 8, 9: AI Gemini Trả Lời + Lịch Sử Chat + Cắt Tin Nhắn Dài + Gửi Sang FB
                             ai_reply = await call_gemini_ai(env, sender_id, user_text)
                             await send_fb_message(env, sender_id, ai_reply)
 
@@ -251,5 +237,3 @@ class DefaultExport:
                 return Response.new(f"Error: {str(e)}", status=500)
 
         return Response.new("Method Not Allowed", status=405)
-
-export default DefaultExport()
