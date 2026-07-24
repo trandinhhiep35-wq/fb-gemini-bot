@@ -19,7 +19,6 @@ export default {
     if (request.method === "POST") {
       try {
         const body = await request.json();
-        // In toàn bộ dữ liệu Facebook gửi tới để kiểm tra trên Observability
         console.log("FULL FACEBOOK PAYLOAD:", JSON.stringify(body));
 
         if (body.object === "page") {
@@ -29,7 +28,7 @@ export default {
             if (webhookEvent && webhookEvent.sender && webhookEvent.sender.id) {
               const senderPsid = webhookEvent.sender.id;
               
-              // Lấy nội dung text, nếu gửi ảnh/sticker thì gán chữ mặc định để bot vẫn rep được
+              // Lấy nội dung text, nếu gửi ảnh/sticker thì gán chữ mặc định
               let messageText = "Xin chào";
               if (webhookEvent.message && webhookEvent.message.text) {
                 messageText = webhookEvent.message.text;
