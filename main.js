@@ -19,7 +19,6 @@ export default {
     if (request.method === "POST") {
       try {
         const body = await request.json();
-        console.log("FULL FACEBOOK PAYLOAD:", JSON.stringify(body));
 
         if (body.object === "page") {
           for (const entry of body.entry) {
@@ -28,7 +27,6 @@ export default {
             if (webhookEvent && webhookEvent.sender && webhookEvent.sender.id) {
               const senderPsid = webhookEvent.sender.id;
               
-              // Lấy nội dung text, nếu gửi ảnh/sticker thì gán chữ mặc định
               let messageText = "Xin chào";
               if (webhookEvent.message && webhookEvent.message.text) {
                 messageText = webhookEvent.message.text;
@@ -36,15 +34,11 @@ export default {
                 messageText = "Người dùng vừa gửi một tệp đính kèm hoặc hình ảnh.";
               }
 
-              console.log(`Đang xử lý tin nhắn từ ${senderPsid}: ${messageText}`);
-
-              // Gọi Gemini API để lấy câu trả lời
+              // Gọi Gemini API
               const aiReply = await callGeminiAPI(messageText, env.GEMINI_API_KEY);
 
               // Gửi tin nhắn trả lại Facebook Messenger
               await sendFacebookMessage(senderPsid, aiReply, env.PAGE_ACCESS_TOKEN);
-            } else {
-              console.log("Webhook nhận được nhưng không phải sự kiện nhắn tin chuẩn.");
             }
           }
         }
@@ -59,7 +53,7 @@ export default {
   },
 };
 
-// Hàm gọi Gemini API
+// Hàm gọi Gemini API (Đã tối ưu bắt lỗi)
 async function callGeminiAPI(prompt, apiKey) {
   try {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
@@ -69,11 +63,19 @@ async function callGeminiAPI(prompt, apiKey) {
         contents: [{ parts: [{ text: prompt }] }]
       })
     });
+    
     const data = await response.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Xin lỗi, tôi không thể trả lời lúc này.";
+    console.log("GEMINI RESPONSE:", JSON.stringify(data));
+
+    if (data.candidates && data.candidates.length > 0) {
+      return data.candidates[0].content?.parts?.[0]?.text || "Gemini trả về dữ liệu trống.";
+    } else {
+      console.error("Gemini từ chối hoặc lỗi cấu trúc:", data);
+      return "Lỗi từ Google Gemini: " + (data.error?.message || "Không rõ nguyên nhân.");
+    }
   } catch (error) {
     console.error("Gemini API error:", error);
-    return "Đã xảy ra lỗi khi kết nối với Gemini.";
+    return "Đã xảy ra lỗi kết nối mạng tới Gemini.";
   }
 }
 
@@ -85,12 +87,9 @@ async function sendFacebookMessage(senderPsid, responseText, accessToken) {
     message: { text: responseText }
   };
 
-  const res = await fetch(url, {
+  await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
-  
-  const resData = await res.json();
-  console.log("Kết quả gửi tin nhắn cho Facebook:", JSON.stringify(resData));
 }
