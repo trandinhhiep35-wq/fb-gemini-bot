@@ -3,7 +3,7 @@ import re
 from js import Response, fetch
 
 # ==========================================
-# THÔNG TIN SẢN PHẨM & BẢNG GIÁ (ÔNG SỬA Ở ĐÂY)
+# CẤU HÌNH HỆ THỐNG & BẢNG GIÁ (SỬA TRỰC TIẾP TẠI ĐÂY)
 # ==========================================
 SYSTEM_PROMPT = """Bạn là trợ lý bán hàng tự động chuyên nghiệp, thân thiện và nhiệt tình trên Messenger.
 Nhiệm vụ của bạn:
@@ -34,7 +34,7 @@ def split_message(text, max_length=1500):
     return chunks
 
 # ==========================================
-# CÁC HÀM XỬ LÝ SUPABASE & HỆ THỐNG
+# 8 TÍNH NĂNG / HÀM XỬ LÝ HỆ THỐNG
 # ==========================================
 async def supabase_request(env, endpoint, method="GET", body=None, extra_headers=None):
     url = f"{getattr(env, 'SUPABASE_URL', '')}/rest/v1/{endpoint}"
@@ -51,6 +51,7 @@ async def supabase_request(env, endpoint, method="GET", body=None, extra_headers
         req_options["body"] = json.dumps(body)
     return await fetch(url, req_options)
 
+# 1. Chống trùng lặp tin nhắn (Dedupe)
 async def is_duplicate_message(env, mid):
     if not mid:
         return False
@@ -61,6 +62,7 @@ async def is_duplicate_message(env, mid):
     await supabase_request(env, "processed_messages", method="POST", body={"mid": mid})
     return False
 
+# 2. Kiểm tra chế độ trực người thật (Handoff)
 async def check_human_takeover(env, user_id):
     res = await supabase_request(env, f"user_settings?user_id=eq.{user_id}&select=is_human_took_over")
     data = await res.json()
@@ -73,6 +75,7 @@ async def set_human_takeover(env, user_id, status=True):
     headers = {"Prefer": "resolution=merge-duplicates"}
     await supabase_request(env, "user_settings", method="POST", body=body, extra_headers=headers)
 
+# 3. Lấy lịch sử trò chuyện (Chat History)
 async def get_chat_history(env, user_id):
     res = await supabase_request(env, f"chat_history?user_id=eq.{user_id}&select=history")
     data = await res.json()
@@ -85,6 +88,7 @@ async def save_chat_history(env, user_id, history):
     headers = {"Prefer": "resolution=merge-duplicates"}
     await supabase_request(env, "chat_history", method="POST", body=body, extra_headers=headers)
 
+# 4. Trích xuất và lưu đơn hàng tự động (Orders)
 async def extract_and_save_order(env, user_id, text):
     match = re.search(r"(0[3|5|7|8|9][0-9]{8})", text)
     if match:
@@ -93,6 +97,7 @@ async def extract_and_save_order(env, user_id, text):
         return phone
     return None
 
+# 5. Gửi thông báo qua Email bằng Resend (Notify)
 async def send_email_alert(env, subject, content):
     owner_email = getattr(env, "OWNER_EMAIL", "")
     resend_key = getattr(env, "RESEND_API_KEY", "")
@@ -103,6 +108,7 @@ async def send_email_alert(env, subject, content):
     body = {"from": "BotNotification <onboarding@resend.dev>", "to": [owner_email], "subject": subject, "html": f"<p>{content}</p>"}
     await fetch(url, {"method": "POST", "headers": headers, "body": json.dumps(body)})
 
+# 6. Tích hợp AI Gemini xử lý ngữ cảnh (AI)
 async def call_gemini_ai(env, user_id, user_text):
     gemini_key = getattr(env, "GEMINI_API_KEY", "")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
@@ -125,6 +131,7 @@ async def call_gemini_ai(env, user_id, user_text):
     except Exception:
         return "Cảm ơn bạn đã nhắn tin. Shop sẽ phản hồi bạn trong giây lát nhé!"
 
+# 7. Gửi tin nhắn qua Facebook Messenger API
 async def send_fb_message(env, recipient_id, text):
     page_token = getattr(env, "PAGE_ACCESS_TOKEN", "")
     url = f"https://graph.facebook.com/v19.0/me/messages?access_token={page_token}"
@@ -132,7 +139,7 @@ async def send_fb_message(env, recipient_id, text):
         await fetch(url, {"method": "POST", "headers": {"Content-Type": "application/json"}, "body": json.dumps({"recipient": {"id": recipient_id}, "message": {"text": chunk}})})
 
 # ==========================================
-# ENTRY POINT CHÍNH (BẮT BUỘC PHẢI CÓ ON_FETCH)
+# 8. ENTRY POINT CHÍNH (Xác thực Webhook & Xử lý sự kiện)
 # ==========================================
 async def on_fetch(request, env, ctx):
     method = request.method
@@ -175,12 +182,12 @@ async def on_fetch(request, env, ctx):
                             await send_email_alert(env, f"🚨 Khách {sender_id} gọi nhân viên", user_text)
                             continue
 
-Phone = await extract_and_save_order(env, sender_id, user_text)
-if phone:
-    await send_email_alert(env, f"📦 Đơn hàng mới SĐT: {phone}", user_text)
+                        phone = await extract_and_save_order(env, sender_id, user_text)
+                        if phone:
+                            await send_email_alert(env, f"📦 Đơn hàng mới SĐT: {phone}", user_text)
 
-AI_reply = await call_gemini_ai(env, sender_id, user_text)
-await send_fb_message(env, sender_id, ai_reply)
+                        ai_reply = await call_gemini_ai(env, sender_id, user_text)
+                        await send_fb_message(env, sender_id, ai_reply)
             return Response.new("EVENT_RECEIVED", {"status": 200})
         except Exception as e:
             return Response.new(f"Error: {str(e)}", {"status": 500})
