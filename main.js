@@ -19,6 +19,7 @@ export default {
     if (request.method === "POST") {
       try {
         const body = await request.json();
+        console.log("FULL FACEBOOK PAYLOAD:", JSON.stringify(body));
 
         if (body.object === "page") {
           for (const entry of body.entry) {
@@ -27,6 +28,7 @@ export default {
             if (webhookEvent && webhookEvent.sender && webhookEvent.sender.id) {
               const senderPsid = webhookEvent.sender.id;
               
+              // Lấy nội dung tin nhắn văn bản hoặc tệp đính kèm
               let messageText = "Xin chào";
               if (webhookEvent.message && webhookEvent.message.text) {
                 messageText = webhookEvent.message.text;
@@ -34,11 +36,25 @@ export default {
                 messageText = "Người dùng vừa gửi một tệp đính kèm hoặc hình ảnh.";
               }
 
-              // Gọi Gemini API
+              console.log(`Đang xử lý tin nhắn từ ${senderPsid}: ${messageText}`);
+
+              // Lưu tin nhắn của người dùng vào Supabase (Chạy ngầm không chặn luồng chính)
+              if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
+                ctx.waitUntil(saveToSupabase(env, senderPsid, messageText, "user"));
+              }
+
+              // Gọi Gemini API để lấy câu trả lời
               const aiReply = await callGeminiAPI(messageText, env.GEMINI_API_KEY);
+
+              // Lưu phản hồi của bot vào Supabase (Chạy ngầm)
+              if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
+                ctx.waitUntil(saveToSupabase(env, senderPsid, aiReply, "bot"));
+              }
 
               // Gửi tin nhắn trả lại Facebook Messenger
               await sendFacebookMessage(senderPsid, aiReply, env.PAGE_ACCESS_TOKEN);
+            } else {
+              console.log("Webhook nhận được nhưng không phải sự kiện nhắn tin chuẩn.");
             }
           }
         }
@@ -53,7 +69,7 @@ export default {
   },
 };
 
-// Hàm gọi Gemini API (Đã tối ưu bắt lỗi)
+// Hàm gọi Google Gemini API
 async function callGeminiAPI(prompt, apiKey) {
   try {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
@@ -63,19 +79,15 @@ async function callGeminiAPI(prompt, apiKey) {
         contents: [{ parts: [{ text: prompt }] }]
       })
     });
-    
     const data = await response.json();
-    console.log("GEMINI RESPONSE:", JSON.stringify(data));
-
-    if (data.candidates && data.candidates.length > 0) {
-      return data.candidates[0].content?.parts?.[0]?.text || "Gemini trả về dữ liệu trống.";
-    } else {
-      console.error("Gemini từ chối hoặc lỗi cấu trúc:", data);
-      return "Lỗi từ Google Gemini: " + (data.error?.message || "Không rõ nguyên nhân.");
+    
+    if (data.error) {
+      return "Lỗi Google Gemini: " + data.error.message;
     }
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Xin lỗi, tôi không thể trả lời lúc này.";
   } catch (error) {
     console.error("Gemini API error:", error);
-    return "Đã xảy ra lỗi kết nối mạng tới Gemini.";
+    return "Đã xảy ra lỗi khi kết nối với Gemini.";
   }
 }
 
@@ -87,9 +99,35 @@ async function sendFacebookMessage(senderPsid, responseText, accessToken) {
     message: { text: responseText }
   };
 
-  await fetch(url, {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
+  
+  const resData = await res.json();
+  console.log("Kết quả gửi tin nhắn cho Facebook:", JSON.stringify(resData));
+}
+
+// Hàm lưu trữ lịch sử vào Supabase Database
+async function saveToSupabase(env, senderId, message, senderType) {
+  try {
+    await fetch(`${env.SUPABASE_URL}/rest/v1/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": env.SUPABASE_ANON_KEY,
+        "Authorization": `Bearer ${env.SUPABASE_ANON_KEY}`,
+        "Prefer": "return=minimal"
+      },
+      body: JSON.stringify({
+        sender_id: senderId,
+        message: message,
+        sender_type: senderType,
+        created_at: new Date().toISOString()
+      })
+    });
+  } catch (e) {
+    console.error("Lỗi kết nối Supabase:", e);
+  }
 }
