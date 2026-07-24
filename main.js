@@ -19,26 +19,39 @@ export default {
     if (request.method === "POST") {
       try {
         const body = await request.json();
-        console.log("Webhook received:", JSON.stringify(body));
+        // In toàn bộ dữ liệu Facebook gửi tới để kiểm tra trên Observability
+        console.log("FULL FACEBOOK PAYLOAD:", JSON.stringify(body));
 
         if (body.object === "page") {
           for (const entry of body.entry) {
             const webhookEvent = entry.messaging?.[0];
-            if (webhookEvent && webhookEvent.message && webhookEvent.message.text) {
+            
+            if (webhookEvent && webhookEvent.sender && webhookEvent.sender.id) {
               const senderPsid = webhookEvent.sender.id;
-              const messageText = webhookEvent.message.text;
+              
+              // Lấy nội dung text, nếu gửi ảnh/sticker thì gán chữ mặc định để bot vẫn rep được
+              let messageText = "Xin chào";
+              if (webhookEvent.message && webhookEvent.message.text) {
+                messageText = webhookEvent.message.text;
+              } else if (webhookEvent.message && webhookEvent.message.attachments) {
+                messageText = "Người dùng vừa gửi một tệp đính kèm hoặc hình ảnh.";
+              }
+
+              console.log(`Đang xử lý tin nhắn từ ${senderPsid}: ${messageText}`);
 
               // Gọi Gemini API để lấy câu trả lời
               const aiReply = await callGeminiAPI(messageText, env.GEMINI_API_KEY);
 
               // Gửi tin nhắn trả lại Facebook Messenger
               await sendFacebookMessage(senderPsid, aiReply, env.PAGE_ACCESS_TOKEN);
+            } else {
+              console.log("Webhook nhận được nhưng không phải sự kiện nhắn tin chuẩn.");
             }
           }
         }
         return new Response("EVENT_RECEIVED", { status: 200 });
       } catch (err) {
-        console.error("Error processing request:", err);
+        console.error("Lỗi khi xử lý request:", err);
         return new Response("Internal Error", { status: 500 });
       }
     }
@@ -73,9 +86,12 @@ async function sendFacebookMessage(senderPsid, responseText, accessToken) {
     message: { text: responseText }
   };
 
-  await fetch(url, {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
+  
+  const resData = await res.json();
+  console.log("Kết quả gửi tin nhắn cho Facebook:", JSON.stringify(resData));
 }
