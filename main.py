@@ -3,7 +3,7 @@ import re
 from js import Response, fetch
 
 # ==========================================
-# CẤU HÌNH HỆ THỐNG & PROMPT
+# THÔNG TIN SẢN PHẨM & BẢNG GIÁ (ÔNG SỬA Ở ĐÂY)
 # ==========================================
 SYSTEM_PROMPT = """Bạn là trợ lý bán hàng tự động chuyên nghiệp, thân thiện và nhiệt tình trên Messenger.
 Nhiệm vụ của bạn:
@@ -34,7 +34,7 @@ def split_message(text, max_length=1500):
     return chunks
 
 # ==========================================
-# CÁC HÀM XỬ LÝ SUPABASE & TÍNH NĂNG
+# CÁC HÀM XỬ LÝ SUPABASE & HỆ THỐNG
 # ==========================================
 async def supabase_request(env, endpoint, method="GET", body=None, extra_headers=None):
     url = f"{getattr(env, 'SUPABASE_URL', '')}/rest/v1/{endpoint}"
@@ -132,13 +132,12 @@ async def send_fb_message(env, recipient_id, text):
         await fetch(url, {"method": "POST", "headers": {"Content-Type": "application/json"}, "body": json.dumps({"recipient": {"id": recipient_id}, "message": {"text": chunk}})})
 
 # ==========================================
-# ENTRY POINT CHÍNH (CHUẨN ON_FETCH PYTHON)
+# ENTRY POINT CHÍNH (BẮT BUỘC PHẢI CÓ ON_FETCH)
 # ==========================================
 async def on_fetch(request, env, ctx):
     method = request.method
     url = request.url
 
-    # 1. Xác thực Webhook Facebook (GET)
     if method == "GET":
         from urllib.parse import parse_qs, urlparse
         params = parse_qs(urlparse(url).query)
@@ -146,10 +145,9 @@ async def on_fetch(request, env, ctx):
         token = params.get("hub.verify_token", [""])[0]
         challenge = params.get("hub.challenge", [""])[0]
         if mode == "subscribe" and token == getattr(env, "VERIFY_TOKEN", ""):
-            return Response.new(challenge, status=200)
-        return Response.new("Forbidden", status=403)
+            return Response.new(challenge, {"status": 200})
+        return Response.new("Forbidden", {"status": 403})
 
-    # 2. Xử lý tin nhắn đến từ khách hàng (POST)
     if method == "POST":
         try:
             data = json.loads(await request.text())
@@ -177,14 +175,14 @@ async def on_fetch(request, env, ctx):
                             await send_email_alert(env, f"🚨 Khách {sender_id} gọi nhân viên", user_text)
                             continue
 
-                        phone = await extract_and_save_order(env, sender_id, user_text)
-                        if phone:
-                            await send_email_alert(env, f"📦 Đơn hàng mới SĐT: {phone}", user_text)
+Phone = await extract_and_save_order(env, sender_id, user_text)
+if phone:
+    await send_email_alert(env, f"📦 Đơn hàng mới SĐT: {phone}", user_text)
 
-                        ai_reply = await call_gemini_ai(env, sender_id, user_text)
-                        await send_fb_message(env, sender_id, ai_reply)
-            return Response.new("EVENT_RECEIVED", status=200)
+AI_reply = await call_gemini_ai(env, sender_id, user_text)
+await send_fb_message(env, sender_id, ai_reply)
+            return Response.new("EVENT_RECEIVED", {"status": 200})
         except Exception as e:
-            return Response.new(f"Error: {str(e)}", status=500)
+            return Response.new(f"Error: {str(e)}", {"status": 500})
 
-    return Response.new("Method Not Allowed", status=405)
+    return Response.new("Method Not Allowed", {"status": 405})
