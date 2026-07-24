@@ -132,7 +132,7 @@ async def send_fb_message(env, recipient_id, text):
         await fetch(url, {"method": "POST", "headers": {"Content-Type": "application/json"}, "body": json.dumps({"recipient": {"id": recipient_id}, "message": {"text": chunk}})})
 
 # ==========================================
-# ENTRY POINT CHÍNH (CLOUDFLARE WORKER)
+# ENTRY POINT CHÍNH (CHUẨN ON_FETCH PYTHON)
 # ==========================================
 async def on_fetch(request, env, ctx):
     method = request.method
